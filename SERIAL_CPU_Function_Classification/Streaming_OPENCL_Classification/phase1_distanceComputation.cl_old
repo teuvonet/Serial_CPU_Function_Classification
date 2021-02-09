@@ -1,0 +1,98 @@
+/*
+This code is licensed and documented by Teuvonet Technologies.
+Any use of this code, proprietary or personal, needs approval from the company.
+
+*/
+
+
+__kernel  void phase1_distanceComputation(
+	int TOTAL_NUM_FEATURES,
+	int No_Partitions,
+	int TOTAL_NUM_NEURONS,
+	int NUM_LEARNING_RATES,
+	int NUM_NETS,
+	int NUM_CLASSES,
+	__global float *map_data,
+	__global float *overall_distances,
+	__global int *NUM_NEURONS_PER_NET,
+	__global int *NUM_FEATURES_PER_PARTITION,
+	__global int *active_centers
+)
+{
+
+	// Each feature is a thread as per the shuffled order. NOT from original data order. 
+	int tid = (get_global_id(0)); // which feature
+	
+	int partition_number = 0; // Calculate which partition this feature is in. 
+	int part_offset = 0;
+
+	for(int i = 0; i < No_Partitions; ++i)
+	{
+		if(tid < part_offset + NUM_FEATURES_PER_PARTITION[i])
+			break;
+		partition_number ++;
+		part_offset += NUM_FEATURES_PER_PARTITION[i];
+	}
+
+	int base_map_position = (get_global_id(1)) * TOTAL_NUM_FEATURES * TOTAL_NUM_NEURONS; // (50 * 3 ) + (50 * 4) = (50 * 7)
+	int feature_offset = 0;
+
+
+	for(int i =0; i < partition_number; i++)
+	{
+		base_map_position += NUM_FEATURES_PER_PARTITION[i]*TOTAL_NUM_NEURONS;  
+		feature_offset += NUM_FEATURES_PER_PARTITION[i];
+	}	
+
+	int neuronA = base_map_position;
+	// float avg_dist = 0;	
+
+	barrier(CLK_LOCAL_MEM_FENCE | CLK_GLOBAL_MEM_FENCE);
+
+	for(int class_no = 0; class_no < NUM_CLASSES ; ++class_no)
+	{	
+		int mybasedist = 0;
+		float din = 0;
+		float dout = 0;
+		int din_counter = 0;
+		int dout_counter = 0;		
+		int overall_counter = 0;
+		
+		for(int j = 0; j< TOTAL_NUM_NEURONS; ++j)
+		{
+			for(int k = 0; k <TOTAL_NUM_NEURONS; ++k)
+			{
+
+				if((active_centers[get_global_id(1) * TOTAL_NUM_NEURONS * No_Partitions + TOTAL_NUM_NEURONS * partition_number + mybasedist + j] == class_no) && (active_centers[get_global_id(1) * TOTAL_NUM_NEURONS * No_Partitions + TOTAL_NUM_NEURONS * partition_number + mybasedist + k] == class_no) && (active_centers[get_global_id(1) * TOTAL_NUM_NEURONS * No_Partitions + TOTAL_NUM_NEURONS * partition_number + mybasedist + k] != -1) && (active_centers[get_global_id(1) * TOTAL_NUM_NEURONS * No_Partitions + TOTAL_NUM_NEURONS * partition_number + mybasedist + j] != -1) && (j != k))
+				{
+					din += fabs(map_data[neuronA + (mybasedist + j) * NUM_FEATURES_PER_PARTITION[partition_number] + (tid-feature_offset)] - map_data[neuronA + (mybasedist + k) * NUM_FEATURES_PER_PARTITION[partition_number] + (tid-feature_offset)]);
+					din_counter ++;
+					overall_counter ++;
+				}
+					
+				else if((active_centers[get_global_id(1) * TOTAL_NUM_NEURONS * No_Partitions + TOTAL_NUM_NEURONS * partition_number + mybasedist + j] == class_no) && (active_centers[get_global_id(1) * TOTAL_NUM_NEURONS * No_Partitions + TOTAL_NUM_NEURONS * partition_number + mybasedist + k] != class_no) && (active_centers[get_global_id(1) * TOTAL_NUM_NEURONS * No_Partitions + TOTAL_NUM_NEURONS * partition_number + mybasedist + k] != -1))
+				{
+
+					dout += fabs(map_data[neuronA + (mybasedist + j) * NUM_FEATURES_PER_PARTITION[partition_number] + (tid-feature_offset)] - map_data[neuronA + (mybasedist + k) * NUM_FEATURES_PER_PARTITION[partition_number] + (tid-feature_offset)]);
+					dout_counter ++;
+					overall_counter ++;
+				}
+			}
+		}
+		// if(get_group_id(1) == 0 && blockIdx.x < 10)
+		// printf("\nthread : %d dIn: %f dInCount: %d dOut :%f dOutCount : %d", tid, din, din_counter, dout, dout_counter);
+
+		float avg_dOut = (float)(dout) / (float)(dout_counter);
+		float avg_dIn = (float)(din) / (float)(din_counter);
+		float ratioDinDout = avg_dOut/avg_dIn;
+		
+		if(dout_counter == 0)
+		{
+			ratioDinDout = 0.001*tid;
+		}
+              barrier(CLK_LOCAL_MEM_FENCE | CLK_GLOBAL_MEM_FENCE);
+		overall_distances[class_no * NUM_LEARNING_RATES * TOTAL_NUM_FEATURES + (get_global_id(1)) * TOTAL_NUM_FEATURES + tid] = ratioDinDout;
+           printf("\n class %d thread_id %d overall_distances %f",class_no,tid,ratioDinDout);          
+	}
+       
+}
